@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { err, ok } from "@/lib/api/response";
+import { jsonRoute } from "@/lib/api/jsonRoute";
 import { applyAndPersist, orchestratorStore } from "@/lib/game/orchestrator";
 import { prisma } from "@/lib/db/client";
 import { ACTIONS } from "@/constants/gameConfig";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const Body = z.object({
   userId: z.string().min(1),
@@ -12,20 +15,20 @@ const Body = z.object({
   amount: z.number().int().nonnegative().optional(),
 });
 
-export async function POST(req: Request, { params }: { params: { roomId: string } }) {
+export const POST = jsonRoute(async (req: Request, { params }: { params: { roomId: string } }) => {
   const parsed = Body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
-    return NextResponse.json(err("invalid-action", parsed.error.message), { status: 400 });
+    return { status: 400, body: err("invalid-action", parsed.error.message) };
   }
   const { userId, seatNumber, action, amount } = parsed.data;
   const gs = orchestratorStore.get(params.roomId);
-  if (!gs) return NextResponse.json(err("invalid-action", "no active hand"), { status: 400 });
+  if (!gs) return { status: 400, body: err("invalid-action", "no active hand") };
   const player = gs.state.players.get(seatNumber);
   if (!player || player.userId !== userId) {
-    return NextResponse.json(err("forbidden", "seat / user mismatch"), { status: 403 });
+    return { status: 403, body: err("forbidden", "seat / user mismatch") };
   }
   if (gs.state.currentActor !== seatNumber) {
-    return NextResponse.json(err("not-your-turn", "not your turn"), { status: 409 });
+    return { status: 409, body: err("not-your-turn", "not your turn") };
   }
 
   const activeHand = await prisma.hand.findFirst({
@@ -33,7 +36,7 @@ export async function POST(req: Request, { params }: { params: { roomId: string 
     orderBy: { createdAt: "desc" },
   });
   if (!activeHand) {
-    return NextResponse.json(err("server-error", "hand row missing"), { status: 500 });
+    return { status: 500, body: err("server-error", "hand row missing") };
   }
 
   try {
@@ -44,23 +47,21 @@ export async function POST(req: Request, { params }: { params: { roomId: string 
       action,
       amount ?? 0,
     );
-    // Auto-advance street(s) if betting round closed.
     while (gs.needsStreetAdvance()) {
       const advanced = gs.autoAdvanceStreet();
-      if (!advanced) break;
-      if (advanced === "showdown") break;
+      if (!advanced || advanced === "showdown") break;
     }
-    return NextResponse.json(
-      ok({
+    return {
+      body: ok({
         event,
         street: gs.state.street,
         currentActor: gs.state.currentActor,
         potTotal: gs.potTotal(),
         communityCards: gs.state.communityCards,
       }),
-    );
+    };
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
-    return NextResponse.json(err("illegal-bet", message), { status: 400 });
+    return { status: 400, body: err("illegal-bet", message) };
   }
-}
+});

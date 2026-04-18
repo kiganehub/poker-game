@@ -1,4 +1,4 @@
-import { GameState, type SeatInit } from "./GameState";
+import { GameState } from "./GameState";
 import type { ActionEvent } from "@/lib/types/game";
 import type { ActionName } from "@/constants/gameConfig";
 import { prisma } from "@/lib/db/client";
@@ -45,6 +45,14 @@ class RoomOrchestratorStore {
 
 export const orchestratorStore = new RoomOrchestratorStore();
 
+export interface SeatInit {
+  seat: number;
+  userId: string;
+  roomMemberId: string;
+  displayName: string;
+  stack: number;
+}
+
 export interface StartHandInput {
   roomId: string;
   seats: SeatInit[]; // seats that are sat down and ready
@@ -63,11 +71,15 @@ export async function startHand(input: StartHandInput): Promise<GameState> {
     smallBlind,
     bigBlind,
     dealerSeat,
-    seats,
+    seats: seats.map((s) => ({
+      seat: s.seat,
+      userId: s.userId,
+      displayName: s.displayName,
+      stack: s.stack,
+    })),
   });
   orchestratorStore.set(roomId, gs);
 
-  // Persist Hand row + HandPlayer rows + initial post-blind ActionLog.
   const hand = await prisma.hand.create({
     data: {
       roomId,
@@ -85,7 +97,7 @@ export async function startHand(input: StartHandInput): Promise<GameState> {
       players: {
         create: seats.map((s) => ({
           userId: s.userId,
-          roomMemberId: s.userId, // caller is responsible for providing roomMemberId in future; simplified for MVP
+          roomMemberId: s.roomMemberId,
           seatNumber: s.seat,
           holeCards: gs.state.players.get(s.seat)?.holeCards?.join(" ") ?? null,
           invested: gs.state.players.get(s.seat)?.invested ?? 0,

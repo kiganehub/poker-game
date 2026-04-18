@@ -1,13 +1,16 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
 import { generateInviteCode, resolveGuestUser } from "@/lib/auth/session";
 import { err, ok } from "@/lib/api/response";
+import { jsonRoute } from "@/lib/api/jsonRoute";
 import {
   DEFAULT_BIG_BLIND,
   DEFAULT_INITIAL_STACK,
   DEFAULT_SMALL_BLIND,
 } from "@/constants/gameConfig";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const Body = z.object({
   hostGuestId: z.string().min(1),
@@ -19,10 +22,10 @@ const Body = z.object({
   initialStack: z.number().int().positive().optional(),
 });
 
-export async function POST(req: Request) {
+export const POST = jsonRoute(async (req: Request) => {
   const parsed = Body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
-    return NextResponse.json(err("invalid-action", parsed.error.message), { status: 400 });
+    return { status: 400, body: err("invalid-action", parsed.error.message) };
   }
   const b = parsed.data;
   const host = await resolveGuestUser(b.hostGuestId, b.hostDisplayName);
@@ -37,7 +40,6 @@ export async function POST(req: Request) {
       maxPlayers: b.maxPlayers,
     },
   });
-  // Pre-create seats.
   await prisma.seat.createMany({
     data: Array.from({ length: b.maxPlayers }, (_, i) => ({
       roomId: room.id,
@@ -45,7 +47,11 @@ export async function POST(req: Request) {
       stack: room.initialStack,
     })),
   });
-  return NextResponse.json(
-    ok({ roomId: room.id, inviteCode: room.inviteCode, hostUserId: host.id }),
-  );
-}
+  return {
+    body: ok({
+      roomId: room.id,
+      inviteCode: room.inviteCode,
+      hostUserId: host.id,
+    }),
+  };
+});

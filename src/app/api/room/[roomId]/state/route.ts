@@ -1,16 +1,12 @@
-import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { err, ok } from "@/lib/api/response";
+import { jsonRoute } from "@/lib/api/jsonRoute";
 import { orchestratorStore } from "@/lib/game/orchestrator";
 
-/**
- * Public game state. Hides other players' hole cards unless specifically
- * requesting your own (?userId=...) view.
- */
-export async function GET(
-  req: Request,
-  { params }: { params: { roomId: string } },
-) {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export const GET = jsonRoute(async (req: Request, { params }: { params: { roomId: string } }) => {
   const url = new URL(req.url);
   const viewerUserId = url.searchParams.get("userId");
 
@@ -23,11 +19,11 @@ export async function GET(
       },
     },
   });
-  if (!room) return NextResponse.json(err("not-found", "room not found"), { status: 404 });
+  if (!room) return { status: 404, body: err("not-found", "room not found") };
 
   const gs = orchestratorStore.get(room.id);
-  return NextResponse.json(
-    ok({
+  return {
+    body: ok({
       room: {
         id: room.id,
         name: room.name,
@@ -65,5 +61,5 @@ export async function GET(
           }
         : null,
     }),
-  );
-}
+  };
+});
