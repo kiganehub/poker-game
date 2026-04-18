@@ -1,0 +1,269 @@
+// Home Poker Game - Prisma schema
+// See docs/HUD_DEFINITIONS.md for statistic semantics.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          String   @id @default(cuid())
+  guestId     String?  @unique
+  displayName String
+  createdAt   DateTime @default(now())
+
+  roomMembers RoomMember[]
+  handPlayers HandPlayer[]
+  playerStats PlayerStats[]
+  actionLogs  ActionLog[]
+  hostedRooms Room[]        @relation("HostedRooms")
+}
+
+model Room {
+  id           String   @id @default(cuid())
+  name         String
+  hostUserId   String
+  inviteCode   String   @unique
+  smallBlind   Int      @default(10)
+  bigBlind     Int      @default(20)
+  initialStack Int      @default(1000)
+  maxPlayers   Int      @default(6) // 6 or 9
+  status       String   @default("waiting") // waiting | running | ended
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  host    User          @relation("HostedRooms", fields: [hostUserId], references: [id])
+  members RoomMember[]
+  seats   Seat[]
+  hands   Hand[]
+  stats   PlayerStats[]
+}
+
+model RoomMember {
+  id             String    @id @default(cuid())
+  userId         String
+  roomId         String
+  joinedAt       DateTime  @default(now())
+  disconnectedAt DateTime?
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room        Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  seats       Seat[]
+  handPlayers HandPlayer[]
+
+  @@unique([userId, roomId])
+  @@index([roomId])
+}
+
+model Seat {
+  id           String   @id @default(cuid())
+  roomId       String
+  seatNumber   Int
+  userId       String?
+  roomMemberId String?
+  stack        Int      @default(1000)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  room       Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomMember RoomMember? @relation(fields: [roomMemberId], references: [id], onDelete: SetNull)
+
+  @@unique([roomId, seatNumber])
+  @@index([roomId, userId])
+}
+
+model Hand {
+  id             String   @id @default(cuid())
+  roomId         String
+  handNumber     Int
+  dealerSeat     Int
+  smallBlindSeat Int
+  bigBlindSeat   Int
+  street         String   @default("preflop") // preflop | flop | turn | river | showdown | finished
+  status         String   @default("active") // active | finished | error
+  potTotal       Int      @default(0)
+
+  holeCards      Json // { "0": ["AS","KH"], ... } seat -> cards
+  communityCards Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  room         Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  players      HandPlayer[]
+  actionLog    ActionLog[]
+  streetStates StreetState[]
+
+  @@index([roomId, handNumber])
+}
+
+model HandPlayer {
+  id           String @id @default(cuid())
+  handId       String
+  userId       String
+  roomMemberId String
+  seatNumber   Int
+  holeCards    String? // e.g. "AS KH"
+
+  invested   Int    @default(0)
+  currentBet Int    @default(0)
+  status     String @default("active") // active | folded | all-in
+
+  result    String? // win | loss | tie
+  winAmount Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  hand    Hand        @relation(fields: [handId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  member  RoomMember  @relation(fields: [roomMemberId], references: [id], onDelete: Cascade)
+  actions ActionLog[]
+
+  @@unique([handId, seatNumber])
+  @@index([handId, userId])
+}
+
+model ActionLog {
+  id            String @id @default(cuid())
+  handId        String
+  handPlayerId  String
+  userId        String
+  seatNumber    Int
+  position      String // UTG | HJ | CO | BTN | SB | BB
+  street        String // preflop | flop | turn | river
+  action        String // fold | check | call | bet | raise | all-in | post-blind
+  amount        Int    @default(0)
+  potSizeBefore Int
+  toCall        Int    @default(0)
+  stackBefore   Int
+  stackAfter    Int
+
+  // classification flags (source-of-truth for HUD stats)
+  isVoluntary    Boolean @default(false) // counted toward VPIP
+  isOpenRaise    Boolean @default(false)
+  isThreeBet     Boolean @default(false)
+  isFourBetPlus  Boolean @default(false)
+  isCBet         Boolean @default(false)
+  isCBetOppFaced Boolean @default(false) // this player faced a cbet opportunity
+  isCheckRaise   Boolean @default(false)
+  isFoldTo3Bet   Boolean @default(false)
+  isFoldToCBet   Boolean @default(false)
+  isStealAttempt Boolean @default(false)
+  isFoldBBSteal  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  hand       Hand       @relation(fields: [handId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  handPlayer HandPlayer @relation(fields: [handPlayerId], references: [id], onDelete: Cascade)
+
+  @@index([handId, userId])
+  @@index([handId, street])
+}
+
+model StreetState {
+  id             String @id @default(cuid())
+  handId         String
+  street         String
+  potSize        Int
+  communityCards Json
+  actionOrder    Json
+  currentActor   Int?
+
+  hand Hand @relation(fields: [handId], references: [id], onDelete: Cascade)
+
+  @@unique([handId, street])
+}
+
+model PlayerStats {
+  id     String @id @default(cuid())
+  userId String
+  roomId String
+
+  handsPlayed Int @default(0)
+
+  vpip      Int @default(0)
+  vpipDenom Int @default(0)
+
+  pfr      Int @default(0)
+  pfrDenom Int @default(0)
+
+  // AF uses counters; display = (betRaiseCount) / (callCount)
+  betRaiseCount Int @default(0)
+  callCount     Int @default(0)
+
+  threeBet      Int @default(0)
+  threeBetDenom Int @default(0)
+
+  foldTo3Bet      Int @default(0)
+  foldTo3BetDenom Int @default(0)
+
+  cbet      Int @default(0)
+  cbetDenom Int @default(0)
+
+  foldToCBet      Int @default(0)
+  foldToCBetDenom Int @default(0)
+
+  wtsd      Int @default(0)
+  wtsdDenom Int @default(0)
+
+  wsd      Int @default(0)
+  wsdDenom Int @default(0)
+
+  steal      Int @default(0)
+  stealDenom Int @default(0)
+
+  foldBBToSteal      Int @default(0)
+  foldBBToStealDenom Int @default(0)
+
+  checkRaise      Int @default(0)
+  checkRaiseDenom Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room      Room                  @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  snapshots PlayerStatsSnapshot[]
+
+  @@unique([userId, roomId])
+  @@index([roomId])
+}
+
+model PlayerStatsSnapshot {
+  id      String @id @default(cuid())
+  statsId String
+  handId  String
+
+  handsPlayed     Int
+  vpipPercent     Float
+  pfrPercent      Float
+  af              Float
+  threeBetPercent Float
+  cbetPercent     Float
+  wtsdPercent     Float
+  wsdPercent      Float
+
+  createdAt DateTime @default(now())
+
+  stats PlayerStats @relation(fields: [statsId], references: [id], onDelete: Cascade)
+
+  @@index([statsId, handId])
+}
+
+model ReconnectToken {
+  id        String   @id @default(cuid())
+  userId    String
+  roomId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([roomId, userId])
+}
